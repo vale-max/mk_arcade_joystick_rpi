@@ -34,9 +34,16 @@
 #include <linux/mutex.h>
 #include <linux/slab.h>
 
+#include <linux/timer.h>
 #include <linux/ioport.h>
 #include <asm/io.h>
 
+#include <linux/version.h>
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,16,0)
+#define timer_container_of(var, t, member) from_timer(var, t, member)
+#define timer_delete_sync(t) del_timer_sync(t)
+#endif
 
 MODULE_AUTHOR("Matthieu Proucelle");
 MODULE_DESCRIPTION("GPIO and MCP23017 Arcade Joystick Driver");
@@ -44,8 +51,12 @@ MODULE_LICENSE("GPL");
 
 #define MK_MAX_DEVICES		9
 
-#ifdef RPI2
+#if defined(RPI4)
+#define PERI_BASE        0xFE000000
+#elif defined(RPI2)
 #define PERI_BASE        0x3F000000
+#elif defined(RPI5)
+#error "RPi 5 (BCM2712) uses the RP1 I/O chip, not a directly-mapped GPIO peripheral - this driver's register-level GPIO access does not apply to RPi 5."
 #else
 #define PERI_BASE        0x20000000
 #endif
@@ -367,7 +378,7 @@ static void mk_process_packet(struct mk *mk) {
  */
 
 static void mk_timer(struct timer_list *t) {
-    struct mk *mk = from_timer(mk, t, timer);
+    struct mk *mk = timer_container_of(mk, t, timer);   // was from_timer(...)
     mk_process_packet(mk);
     mod_timer(&mk->timer, jiffies + MK_REFRESH_TIME);
 }
@@ -392,7 +403,7 @@ static void mk_close(struct input_dev *dev) {
 
     mutex_lock(&mk->mutex);
     if (!--mk->used) {
-        del_timer_sync(&mk->timer);
+        timer_delete_sync(&mk->timer);   // was del_timer_sync(...)
     }
     mutex_unlock(&mk->mutex);
 }
@@ -423,7 +434,7 @@ static int __init mk_setup_pad(struct mk *mk, int idx, int pad_type_arg) {
             pr_err("Custom device needs gpio argument\n");
             return -EINVAL;
         } else if(gpio_cfg.nargs != 12){
-             pr_err("Invalid gpio argument\n", pad_type);
+             pr_err("Invalid gpio argument %d\n", pad_type);
              return -EINVAL;
         }
     
